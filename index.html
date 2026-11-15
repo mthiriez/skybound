@@ -13,22 +13,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0b1220;color:#eaf2f
  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
  -webkit-user-select:none;user-select:none;touch-action:none;overscroll-behavior:none}
 #view{position:fixed;inset:0;width:100%;height:100%;display:block;background:#0b1220;touch-action:none}
-#hud{position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;
- padding:calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 14px) 0 calc(env(safe-area-inset-left) + 14px);
- pointer-events:none;font-variant-numeric:tabular-nums}
-.cell{background:rgba(8,14,26,.55);border:1px solid rgba(120,190,255,.22);border-radius:9px;
- padding:4px 10px;display:flex;align-items:baseline;gap:5px;backdrop-filter:blur(6px)}
-.cell span{font-size:8px;letter-spacing:1.6px;color:#7fb4e6}
-.cell b{font-size:16px;font-weight:800;color:#eaf2ff;min-width:34px;text-align:right}
-.cell i{font-size:8px;font-style:normal;color:#7fb4e6}
-.cell.fps b{font-size:12px;color:#9be7a0}
-#stick{position:fixed;left:calc(env(safe-area-inset-left) + 14px);bottom:calc(env(safe-area-inset-bottom) + 14px);
+#hdg{position:fixed;top:calc(env(safe-area-inset-top) + 8px);left:50%;transform:translateX(-50%);
+ width:220px;height:30px;border-radius:10px;background:rgba(8,14,26,.42);
+ border:1px solid rgba(120,190,255,.18);backdrop-filter:blur(6px);z-index:3;pointer-events:none}
+#stick{display:none;position:fixed;left:calc(env(safe-area-inset-left) + 14px);bottom:calc(env(safe-area-inset-bottom) + 14px);
  width:118px;height:118px;border-radius:50%;border:1.5px solid rgba(120,190,255,.25);
  background:radial-gradient(circle,rgba(20,40,70,.45),rgba(10,18,32,.25));pointer-events:none;opacity:.85}
 #knob{position:absolute;left:50%;top:50%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;
  background:radial-gradient(circle at 40% 35%,#bfe4ff,#4a90d9 60%,#1d3f68);
  box-shadow:0 0 18px rgba(90,170,255,.55);transition:transform .04s linear}
-#boost{position:fixed;right:calc(env(safe-area-inset-right) + 18px);bottom:calc(env(safe-area-inset-bottom) + 22px);
+#boost{display:none;position:fixed;right:calc(env(safe-area-inset-right) + 18px);bottom:calc(env(safe-area-inset-bottom) + 22px);
  width:86px;height:86px;border-radius:50%;border:2px solid rgba(255,196,90,.8);color:#fff;
  background:radial-gradient(circle at 50% 40%,rgba(255,180,60,.35),rgba(60,35,0,.55));
  font:800 12px/1 -apple-system,BlinkMacSystemFont,Arial,sans-serif;letter-spacing:2px;
@@ -61,16 +55,16 @@ button#go:disabled{opacity:.35;border-color:rgba(160,190,220,.4)}
 #place.hidden{display:none}
 #place b{font-size:13px;font-weight:800;letter-spacing:1.2px;color:#eaf2ff}
 #place span{font-size:9px;letter-spacing:.8px;color:#8fc0ea;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58vw}
-#throttle{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 20px);
- width:min(232px,42vw);height:52px;border-radius:14px;background:rgba(8,14,26,.5);
- border:1px solid rgba(120,190,255,.22);backdrop-filter:blur(6px);z-index:5;
- padding:10px 14px 7px;display:flex;flex-direction:column;justify-content:space-between}
-#thrTrack{position:relative;height:6px;border-radius:4px;background:rgba(255,255,255,.14);margin-top:2px}
-#thrFill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:linear-gradient(90deg,#5aa9ff,#ffd39b);width:43%}
-#thrKnob{position:absolute;top:50%;width:24px;height:24px;margin:-12px 0 0 -12px;border-radius:50%;left:43%;
+#throttle{position:fixed;right:calc(env(safe-area-inset-right) + 10px);top:50%;transform:translateY(-50%);
+ width:62px;height:min(246px,60vh);border-radius:16px;background:rgba(8,14,26,.5);
+ border:1px solid rgba(120,190,255,.22);backdrop-filter:blur(6px);z-index:5}
+#thrCap{position:absolute;top:9px;left:0;right:0;text-align:center;font-size:8px;letter-spacing:1.6px;color:#7fb4e6}
+#thrTrack{position:absolute;left:50%;top:28px;bottom:46px;width:6px;margin-left:-3px;border-radius:4px;background:rgba(255,255,255,.14)}
+#thrFill{position:absolute;left:0;right:0;bottom:0;border-radius:4px;background:linear-gradient(0deg,#5aa9ff,#ffd39b);height:43%}
+#thrKnob{position:absolute;left:50%;width:24px;height:24px;margin-left:-12px;border-radius:50%;bottom:43%;transform:translateY(50%);
  background:radial-gradient(circle at 40% 35%,#ffffff,#8fc6ff 65%,#3f7bb5);box-shadow:0 0 12px rgba(120,190,255,.7)}
-#thrLabel{font-size:9px;letter-spacing:1.5px;color:#9fc4e8;text-align:center}
-#thrLabel b{color:#eaf2ff;font-size:11.5px}
+#thrLabel{position:absolute;left:0;right:0;bottom:7px;text-align:center;font-size:7px;letter-spacing:1px;color:#9fc4e8}
+#thrLabel b{display:block;color:#eaf2ff;font-size:12px;letter-spacing:0}
 #rotate{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
  background:#0b1220;z-index:40;color:#cfe6ff;font-size:14px;letter-spacing:2px;text-align:center;padding:30px}
 #labels{position:fixed;inset:0;pointer-events:none;z-index:3;overflow:hidden}
@@ -79,11 +73,11 @@ button#go:disabled{opacity:.35;border-color:rgba(160,190,220,.4)}
  font-size:11px;color:#eaf2ff;white-space:nowrap;backdrop-filter:blur(6px)}
 .lbl b{font-weight:700}
 .lbl i{font-style:normal;color:#9cc4e8;margin-left:6px;font-size:10px}
-#lmBtn{position:fixed;right:calc(env(safe-area-inset-right) + 18px);bottom:calc(env(safe-area-inset-bottom) + 126px);
- padding:9px 14px;border-radius:10px;border:1px solid rgba(120,190,255,.3);
- background:rgba(8,14,26,.6);color:#cfe6ff;font-size:10px;font-weight:800;letter-spacing:1.6px;z-index:6}
+#lmBtn{position:fixed;right:calc(env(safe-area-inset-right) + 14px);bottom:calc(env(safe-area-inset-bottom) + 16px);
+ padding:10px 16px;border-radius:22px;border:1px solid rgba(120,190,255,.35);
+ background:rgba(8,14,26,.6);color:#cfe6ff;font-size:10px;font-weight:800;letter-spacing:2px;z-index:6;backdrop-filter:blur(6px)}
 #lmBtn.on{background:rgba(60,120,200,.55)}
-#lmPanel{position:fixed;right:calc(env(safe-area-inset-right) + 18px);bottom:calc(env(safe-area-inset-bottom) + 172px);
+#lmPanel{position:fixed;right:calc(env(safe-area-inset-right) + 14px);bottom:calc(env(safe-area-inset-bottom) + 62px);
  width:188px;max-height:44vh;overflow:auto;padding:8px;border-radius:12px;
  background:rgba(8,14,26,.72);border:1px solid rgba(120,190,255,.22);z-index:6;backdrop-filter:blur(8px)}
 #lmPanel.hidden{display:none}
@@ -95,18 +89,14 @@ button#go:disabled{opacity:.35;border-color:rgba(160,190,220,.4)}
 </head>
 <body>
 <canvas id="view"></canvas>
-<div id="hud">
-  <div class="cell"><span>ALT</span><b id="alt">0</b><i>m</i></div>
-  <div class="cell"><span>VIT</span><b id="spd">0</b><i>km/h</i></div>
-  <div class="cell"><span>CAP</span><b id="hdg">0</b><i>°</i></div>
-  <div class="cell fps"><span>FPS</span><b id="fps">0</b></div>
-</div>
+<canvas id="hdg" width="220" height="30"></canvas>
 <div id="place" class="hidden"><b id="placeCity">—</b><span id="placeStreet"></span></div>
 <div id="stick"><div id="knob"></div></div>
 <button id="boost">BOOST</button>
 <div id="throttle">
+  <div id="thrCap">VITESSE</div>
   <div id="thrTrack"><i id="thrFill"></i><span id="thrKnob"></span></div>
-  <div id="thrLabel">VITESSE <b id="thrVal">252</b> km/h</div>
+  <div id="thrLabel"><b id="thrVal">252</b>km/h</div>
 </div>
 <button id="pause">II</button>
 <div id="start" class="overlay">
@@ -126,6 +116,6 @@ button#go:disabled{opacity:.35;border-color:rgba(160,190,220,.4)}
 <div id="labels"></div>
 <button id="lmBtn">REPÈRES</button>
 <div id="lmPanel" class="hidden"><div id="lmList"></div></div>
-<script type="module" src="./app.js?v=10"></script>
+<script type="module" src="./app.js?v=11"></script>
 </body>
 </html>
