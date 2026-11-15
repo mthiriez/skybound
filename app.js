@@ -5,10 +5,7 @@ import * as THREE from './vendor/three.module.min.js';
    Tout est chargé côté navigateur, sans serveur ni clé. */
 
 const UI = {
-  alt: document.getElementById('alt'),
-  spd: document.getElementById('spd'),
   hdg: document.getElementById('hdg'),
-  fps: document.getElementById('fps'),
   start: document.getElementById('start'),
   status: document.getElementById('status'),
   bar: document.getElementById('bar').firstElementChild,
@@ -774,14 +771,13 @@ const SPD_MIN = 150, SPD_MAX = 380;
 let targetKmh = 252;
 function drawThrottle() {
   const p = (targetKmh - SPD_MIN) / (SPD_MAX - SPD_MIN);
-  UI.thrFill.style.width = (p * 100).toFixed(1) + '%';
-  UI.thrKnob.style.left = (p * 100).toFixed(1) + '%';
+  UI.thrFill.style.height = (p * 100).toFixed(1) + '%';
+  UI.thrKnob.style.bottom = (p * 100).toFixed(1) + '%';
   UI.thrVal.textContent = Math.round(targetKmh);
 }
-function setThrottleFromX(clientX) {
-  const r = UI.throttle.getBoundingClientRect();
-  const pad = 14;
-  const p = Math.max(0, Math.min(1, (clientX - r.left - pad) / Math.max(1, r.width - pad * 2)));
+function setThrottleFromY(clientY) {
+  const r = UI.thrTrack.getBoundingClientRect();
+  const p = 1 - Math.max(0, Math.min(1, (clientY - r.top) / Math.max(1, r.height)));
   targetKmh = SPD_MIN + p * (SPD_MAX - SPD_MIN);
   drawThrottle();
 }
@@ -790,13 +786,13 @@ UI.throttle.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   thrPointer = e.pointerId;
   try { UI.throttle.setPointerCapture(e.pointerId); } catch (err) {}
-  setThrottleFromX(e.clientX);
+  setThrottleFromY(e.clientY);
   initAudio();
 }, { passive: false });
 UI.throttle.addEventListener('pointermove', (e) => {
   if (thrPointer !== e.pointerId) return;
   e.preventDefault();
-  setThrottleFromX(e.clientX);
+  setThrottleFromY(e.clientY);
 }, { passive: false });
 UI.throttle.addEventListener('pointerup', () => { thrPointer = null; });
 UI.throttle.addEventListener('pointercancel', () => { thrPointer = null; });
@@ -1013,16 +1009,47 @@ function updateCamera(dt) {
 }
 
 /* ---------- interface ---------- */
+const hdgCtx = UI.hdg ? UI.hdg.getContext('2d') : null;
+const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+function drawHeading(deg) {
+  if (!hdgCtx) return;
+  const W = UI.hdg.width, H = UI.hdg.height, c = W / 2;
+  const g = hdgCtx;
+  g.clearRect(0, 0, W, H);
+  const pxPerDeg = 2.3;
+  for (let d = Math.floor(deg - 48); d <= deg + 48; d += 5) {
+    const x = c + (d - deg) * pxPerDeg;
+    if (x < 4 || x > W - 4) continue;
+    const dd = ((d % 360) + 360) % 360;
+    const major = dd % 45 === 0;
+    g.strokeStyle = major ? 'rgba(255,207,122,.9)' : 'rgba(150,190,235,.5)';
+    g.lineWidth = major ? 1.8 : 1;
+    g.beginPath();
+    g.moveTo(x, H - (major ? 12 : 6));
+    g.lineTo(x, H - 2);
+    g.stroke();
+    if (major) {
+      g.fillStyle = dd === 0 ? '#ffcf7a' : 'rgba(226,238,255,.92)';
+      g.font = 'bold 10px Arial';
+      g.textAlign = 'center';
+      g.fillText(CARD[(dd / 45) % 8], x, 13);
+    }
+  }
+  g.strokeStyle = '#ffcf7a';
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(c, H - 15);
+  g.lineTo(c, H - 4);
+  g.stroke();
+}
 let hudTick = 0;
 function updateHud(dt) {
   hudTick += dt;
-  if (hudTick < 0.1) return;
+  if (hudTick < 0.08) return;
   hudTick = 0;
-  UI.alt.textContent = Math.round(flight.pos.y);
-  UI.spd.textContent = Math.round(flight.speed * 3.6);
   let deg = flight.heading * 180 / Math.PI;
   deg = (deg % 360 + 360) % 360;
-  UI.hdg.textContent = Math.round(deg) % 360;
+  drawHeading(deg);
 }
 
 /* ---------- boucle ---------- */
@@ -1060,7 +1087,6 @@ function frame(ts) {
   frames++; fpsTime += dt;
   if (fpsTime >= 0.5) {
     fpsValue = Math.round(frames / fpsTime);
-    UI.fps.textContent = fpsValue;
     frames = 0; fpsTime = 0;
     if (state === 'flying') {
       if (fpsValue < 28) { slow++; } else { slow = Math.max(0, slow - 1); }
