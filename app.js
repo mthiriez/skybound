@@ -93,19 +93,22 @@ async function loadElevTile(col, row) {
   }
   if (buf.byteLength < 256 * 256 * 4) throw new Error('Relief ' + col + '/' + row + ' : tuile incomplète (' + buf.byteLength + ' octets)');
   const dv = new DataView(buf);
-  // L'IGN ne documente pas l'ordre des octets du BIL : on le déduit de la
-  // première tuile, en gardant l'ordre qui donne des altitudes plausibles.
+  // Le BIL de l'IGN est en petit-boutiste (vérifié en ligne : altitudes 13 à 38 m
+  // autour de Lille). On garde une détection sur la moyenne pour rester robuste
+  // si l'IGN change un jour de convention.
   if (elevLittleEndian === null) {
-    let bigOk = 0, littleOk = 0;
-    for (let k = 0; k < 96; k++) {
-      const off = (k * 2731) % (65536 - 1) * 4;
+    let beSum = 0, beOk = 0, leSum = 0, leOk = 0;
+    for (let k = 0; k < 512; k++) {
+      const off = ((k * 2731) % 65536) * 4;
       const a = dv.getFloat32(off, false);
       const b = dv.getFloat32(off, true);
-      if (isFinite(a) && a > -500 && a < 3200) bigOk++;
-      if (isFinite(b) && b > -500 && b < 3200) littleOk++;
+      if (isFinite(a) && a > -500 && a < 3200) { beSum += a; beOk++; }
+      if (isFinite(b) && b > -500 && b < 3200) { leSum += b; leOk++; }
     }
-    elevLittleEndian = littleOk > bigOk;
-    console.info('[SKYBOUND] relief petit-boutiste : ' + elevLittleEndian + ' (' + bigOk + ' vs ' + littleOk + ')');
+    const beMean = beOk ? beSum / beOk : 1e9;
+    const leMean = leOk ? leSum / leOk : 1e9;
+    elevLittleEndian = leOk >= beOk || leMean < 1e8;
+    console.info('[SKYBOUND] relief petit-boutiste=' + elevLittleEndian + ' moyBE=' + Math.round(beMean) + ' moyLE=' + Math.round(leMean));
   }
   const f = new Float32Array(256 * 256);
   for (let i = 0; i < f.length; i++) {
@@ -224,6 +227,14 @@ function buildTerrainMesh(texture) {
       heightGrid[k] = h;
     }
   }
+  let hMin = 1e9, hMax = -1e9;
+  for (let k = 0; k < heightGrid.length; k++) {
+    if (heightGrid[k] < hMin) hMin = heightGrid[k];
+    if (heightGrid[k] > hMax) hMax = heightGrid[k];
+  }
+  if (hMax > 3200 || hMin < -600) throw new Error('Relief incohérent (' + Math.round(hMin) + ' à ' + Math.round(hMax) + ' m) : format de tuile inattendu');
+  console.info('[SKYBOUND] relief de la zone : ' + Math.round(hMin) + ' à ' + Math.round(hMax) + ' m');
+
   let o = 0;
   for (let iy = 0; iy < GRID; iy++) {
     for (let ix = 0; ix < GRID; ix++) {
