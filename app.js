@@ -345,8 +345,13 @@ scene.add(aircraft);
 const DETAIL_Z = 17;                  // ~0,76 m/px à la latitude de Lille
 const DETAIL_N = 5;                   // 5x5 tuiles
 const DETAIL_PX = DETAIL_N * 256;
-const DETAIL_RES = 156543.033928041 * Math.cos(CENTER.lat * Math.PI / 180) / Math.pow(2, DETAIL_Z);
-const DETAIL_SPAN = DETAIL_PX * DETAIL_RES;   // ~970 m de côté
+// Attention : les coordonnées du monde sont en mètres Mercator (comme les tuiles),
+// pas en mètres au sol. Une tuile z17 mesure 305,75 m Mercator (soit ~194 m au sol
+// à la latitude de Lille) : c'est cette valeur qu'il faut utiliser pour dimensionner
+// la fenêtre, sinon l'image est écrasée d'un facteur cos(latitude) et se superpose
+// en fantôme au fond large.
+const DETAIL_SPAN = DETAIL_N * (WORLD / Math.pow(2, DETAIL_Z));   // ~1 529 m Mercator
+const DETAIL_RES_SOL = 156543.033928041 * Math.cos(CENTER.lat * Math.PI / 180) / Math.pow(2, DETAIL_Z); // ~0,76 m/px au sol
 const DETAIL_SEG = 48;
 
 const detailCv = document.createElement('canvas');
@@ -435,7 +440,7 @@ function positionDetail() {
   const span = WORLD / Math.pow(2, DETAIL_Z);
   const cxw = (detailColC + 0.5) * span - WORLD / 2;
   const cyw = WORLD / 2 - (detailRowC + 0.5) * span;
-  detailMesh.position.set(cxw - CX, 1.6, -(cyw - CY));
+  detailMesh.position.set(cxw - CX, 3.0, -(cyw - CY));
   const attr = detailMesh.geometry.getAttribute('position');
   const n2 = DETAIL_SEG + 1;
   for (let iy = 0; iy < n2; iy++) {
