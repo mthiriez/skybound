@@ -12,40 +12,42 @@ const urlO = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.
   try {
     const c = document.createElement('canvas');
     const gl = c.getContext('webgl2') || c.getContext('webgl');
-    log('WebGL: ' + (gl ? 'oui' : 'NON'));
-    if (gl) log('renderer: ' + gl.getParameter(gl.VERSION));
-    log('DecompressionStream: ' + (typeof DecompressionStream));
+    log('WebGL: ' + (gl ? 'oui ' + gl.getParameter(gl.VERSION) : 'NON'));
 
     const r = await fetch(urlE);
-    log('relief HTTP ' + r.status + ' | encoding=' + r.headers.get('content-encoding') + ' | length=' + r.headers.get('content-length'));
     let b = await r.arrayBuffer();
-    log('relief octets: ' + b.byteLength);
-    if (b.byteLength < 262144) {
-      try {
-        const ds = new DecompressionStream('deflate');
-        const st = new Blob([b]).stream().pipeThrough(ds);
-        b = await new Response(st).arrayBuffer();
-        log('apres decompression: ' + b.byteLength);
-      } catch (e) { log('decompression KO: ' + e.message); }
-    }
+    log('relief HTTP ' + r.status + ' | octets ' + b.byteLength);
+
     if (b.byteLength >= 262144) {
+      const n = Math.floor(b.byteLength / 4);
       const dv = new DataView(b);
-      let mn = 1e9, mx = -1e9, s = 0, fin = 0;
-      for (let i = 0; i < 262144; i++) { const v = dv.getFloat32(i*4, false); if (isFinite(v)) { fin++; if (v<mn) mn=v; if (v>mx) mx=v; s+=v; } }
-      log('relief big-endian : min=' + mn.toFixed(1) + ' max=' + mx.toFixed(1) + ' moy=' + (s/fin).toFixed(1));
-      let n2 = 1e9, x2 = -1e9;
-      for (let i = 0; i < 262144; i++) { const v = dv.getFloat32(i*4, true); if (isFinite(v)) { if (v<n2) n2=v; if (v>x2) x2=v; } }
-      log('relief little-endian : min=' + n2.toFixed(1) + ' max=' + x2.toFixed(1));
-      log('premieres valeurs BE: ' + dv.getFloat32(0,false).toFixed(1) + ' ' + dv.getFloat32(4,false).toFixed(1) + ' ' + dv.getFloat32(1024,false).toFixed(1));
+      let beMin = 1e30, beMax = -1e30, beSum = 0, beFin = 0;
+      let leMin = 1e30, leMax = -1e30, leSum = 0, leFin = 0;
+      for (let i = 0; i < n; i++) {
+        const a = dv.getFloat32(i*4, false);
+        if (isFinite(a)) { beFin++; if (a<beMin) beMin=a; if (a>beMax) beMax=a; beSum+=a; }
+        const z = dv.getFloat32(i*4, true);
+        if (isFinite(z)) { leFin++; if (z<leMin) leMin=z; if (z>leMax) leMax=z; leSum+=z; }
+      }
+      log('flottants: ' + n);
+      log('BE min=' + beMin.toFixed(1) + ' max=' + beMax.toFixed(1) + ' moy=' + (beSum/beFin).toFixed(1) + ' finis=' + beFin);
+      log('LE min=' + leMin.toFixed(1) + ' max=' + leMax.toFixed(1) + ' moy=' + (leSum/leFin).toFixed(1) + ' finis=' + leFin);
+      let hex = '';
+      const u8 = new Uint8Array(b, 0, 16);
+      for (let i = 0; i < 16; i++) hex += u8[i].toString(16).padStart(2, '0');
+      log('16 premiers octets: ' + hex);
+      // altitude au centre de Lille si BE
+      log('valeur a l index 50000 BE=' + dv.getFloat32(50000*4, false).toFixed(1) + ' LE=' + dv.getFloat32(50000*4, true).toFixed(1));
+    } else {
+      log('relief trop court');
     }
 
     const img = new Image(); img.crossOrigin = 'anonymous';
     await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('image refusee')); img.src = urlO; });
-    log('ortho: ' + img.naturalWidth + 'x' + img.naturalHeight);
-    const cv = document.createElement('canvas'); cv.width = 8; cv.height = 8;
-    const g2 = cv.getContext('2d'); g2.drawImage(img, 0, 0, 8, 8);
+    const cv = document.createElement('canvas'); cv.width = 4; cv.height = 4;
+    const g2 = cv.getContext('2d'); g2.drawImage(img, 0, 0, 4, 4);
     const px = g2.getImageData(0, 0, 1, 1).data;
-    log('pixel ortho (pas de corruption CORS): ' + px[0] + ',' + px[1] + ',' + px[2]);
+    log('ortho ' + img.naturalWidth + 'x' + img.naturalHeight + ' pixel=' + px[0] + ',' + px[1] + ',' + px[2]);
     log('TERMINE');
   } catch (e) { log('ERREUR: ' + e.message); }
 })();
