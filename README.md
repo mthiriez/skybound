@@ -18,9 +18,9 @@ En ligne : `https://mthiriez.github.io/skybound/`.
 
 ## Ce qui fonctionne réellement
 
-- Terrain construit à partir des **photos aériennes BD ORTHO** de l'IGN (WMTS, zoom 14, 8×8 tuiles assemblées en une texture 2048 px, environ 6 m par pixel au sol).
-- **Relief RGE ALTI** (WMTS `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES`, zoom 12, format BIL 32 bits) échantillonné sur une grille de 321×321 sommets, soit un point tous les 39 m.
-- Zone couverte : environ 12,4 km × 12,4 km centrés sur la Grand-Place de Lille. Au-delà, rien n'est chargé.
+- Terrain construit à partir des **photos aériennes BD ORTHO** de l'IGN (WMTS, zoom 14, 6×6 tuiles assemblées en une texture 1536 px, environ 6 m par pixel au sol).
+- **Relief RGE ALTI** (WMTS `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES`, zoom 12, format BIL 32 bits) échantillonné sur une grille de 321×321 sommets, soit un point tous les 29 m.
+- Zone couverte : environ 9,3 km × 9,3 km centrés sur la Grand-Place de Lille. Au-delà, rien n'est chargé.
 - Un avion au design original, caméra de poursuite amortie, vol arcade (lacet, tangage, inclinaison, montée, décrochage léger, plancher de collision avec le relief).
 - Commandes tactiles : glissement du pouce sur la moitié gauche (virtual stick), bouton BOOST à droite, pause, invite à tourner l'écran, respect des safe areas.
 - Clavier en secours sur ordinateur : flèches ou ZQSD, Maj pour le boost.
