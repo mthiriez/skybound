@@ -853,6 +853,98 @@ function scheduleGeo(dt) {
     .finally(() => { clearTimeout(timer); geoBusy = false; });
 }
 
+/* ---------- repères nommés ---------- */
+const LBL_MAX = 3;
+let pois = [];
+let lblTick = 0;
+const lblEls = [];
+const lblBox = document.getElementById('labels');
+for (let i = 0; i < LBL_MAX; i++) {
+  const d = document.createElement('div');
+  d.className = 'lbl';
+  d.style.display = 'none';
+  if (lblBox) lblBox.appendChild(d);
+  lblEls.push(d);
+}
+const lmPanel = document.getElementById('lmPanel');
+const lmList = document.getElementById('lmList');
+const lmBtn = document.getElementById('lmBtn');
+let lmOpen = false, lmTick = 0;
+
+function fmtDist(m) {
+  return m < 950 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km';
+}
+
+function loadPois() {
+  return fetch('./pois.json').then(r => r.json()).then(list => {
+    pois = list.map(p => {
+      const wx = mercXOf(p.o) - CX, wz = -(mercYOf(p.a) - CY);
+      return { n: p.n, k: p.k, wx: wx, wz: wz, y: 0 };
+    });
+    for (const q of pois) q.y = terrainHeightAt(q.wx, q.wz) + 18;
+    lmTick = 0;
+    console.info('[SKYBOUND] ' + pois.length + ' repères chargés');
+  }).catch((e) => { pois = []; console.warn('[SKYBOUND] repères indisponibles', e); });
+}
+
+const projV = new THREE.Vector3();
+function updateLabels(dt) {
+  lblTick += dt;
+  if (lblTick < 0.22) return;
+  lblTick = 0;
+  if (!pois.length) return;
+  const px = flight.pos.x, pz = flight.pos.z;
+  const cand = [];
+  for (let i = 0; i < pois.length; i++) {
+    const q = pois[i];
+    const dx = q.wx - px, dz = q.wz - pz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 > 2025000000) continue;
+    cand.push([d2, q]);
+  }
+  cand.sort((a, b) => a[0] - b[0]);
+  let shown = 0;
+  for (let i = 0; i < cand.length && shown < LBL_MAX; i++) {
+    const q = cand[i][1];
+    projV.set(q.wx, q.y, q.wz).project(camera);
+    if (projV.z > 1 || projV.x < -1.05 || projV.x > 1.05 || projV.y < -1.05 || projV.y > 1.05) continue;
+    const el = lblEls[shown++];
+    el.innerHTML = '<b>' + q.n + '</b><i>' + fmtDist(Math.sqrt(cand[i][0])) + '</i>';
+    el.style.left = ((projV.x * 0.5 + 0.5) * window.innerWidth).toFixed(0) + 'px';
+    el.style.top = ((-projV.y * 0.5 + 0.5) * window.innerHeight).toFixed(0) + 'px';
+    el.style.display = 'block';
+  }
+  for (let i = shown; i < LBL_MAX; i++) lblEls[i].style.display = 'none';
+}
+
+function renderLandmarks() {
+  if (!lmList || !pois.length) return;
+  const px = flight.pos.x, pz = flight.pos.z;
+  const arr = [];
+  for (let i = 0; i < pois.length; i++) {
+    const q = pois[i];
+    const dx = q.wx - px, dz = q.wz - pz;
+    arr.push([Math.sqrt(dx * dx + dz * dz), q]);
+  }
+  arr.sort((a, b) => a[0] - b[0]);
+  let html = '';
+  for (let i = 0; i < arr.length && i < 14; i++) {
+    html += '<div class="lm"><span>' + arr[i][1].n + '</span><em>' + fmtDist(arr[i][0]) + '</em></div>';
+  }
+  lmList.innerHTML = html;
+}
+
+if (lmBtn) {
+  lmBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    lmOpen = !lmOpen;
+    if (lmPanel) lmPanel.classList.toggle('hidden', !lmOpen);
+    lmBtn.classList.toggle('on', lmOpen);
+    if (lmOpen) renderLandmarks();
+  });
+}
+
 /* ---------- modèle de vol ---------- */
 function updateFlight(dt) {
   const kx = ((keys['arrowright'] || keys['d']) ? 1 : 0) - ((keys['arrowleft'] || keys['a']) ? 1 : 0);
@@ -946,6 +1038,11 @@ function frame(ts) {
   if (state === 'flying') {
     updateFlight(dt);
     updateHud(dt);
+    updateLabels(dt);
+    if (lmOpen) {
+      lmTick += dt;
+      if (lmTick > 1.2) { lmTick = 0; renderLandmarks(); }
+    }
     scheduleGeo(dt);
     bldTick();
     audioUpdate();
@@ -1051,6 +1148,7 @@ async function boot() {
     flight.pos.y = Math.max(360, gh + 340);
     camera.position.set(0, flight.pos.y + 7, 3224);
     camera.lookAt(0, flight.pos.y, 0);
+    await loadPois();
     UI.bar.style.width = '100%';
     UI.status.textContent = 'Prêt · survol de Lille et sa métropole';
     UI.go.disabled = false;
