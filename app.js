@@ -17,6 +17,13 @@ const UI = {
   resume: document.getElementById('resume'),
   pause: document.getElementById('pause'),
   boost: document.getElementById('boost'),
+  place: document.getElementById('place'),
+  placeCity: document.getElementById('placeCity'),
+  placeStreet: document.getElementById('placeStreet'),
+  throttle: document.getElementById('throttle'),
+  thrFill: document.getElementById('thrFill'),
+  thrKnob: document.getElementById('thrKnob'),
+  thrVal: document.getElementById('thrVal'),
   knob: document.getElementById('knob'),
   rotate: document.getElementById('rotate'),
   error: document.getElementById('error'),
@@ -578,15 +585,89 @@ UI.boost.addEventListener('pointerup', boostOff);
 UI.boost.addEventListener('pointercancel', boostOff);
 UI.boost.addEventListener('pointerleave', boostOff);
 
+/* ---------- commande de vitesse ---------- */
+const SPD_MIN = 150, SPD_MAX = 380;
+let targetKmh = 252;
+function drawThrottle() {
+  const p = (targetKmh - SPD_MIN) / (SPD_MAX - SPD_MIN);
+  UI.thrFill.style.width = (p * 100).toFixed(1) + '%';
+  UI.thrKnob.style.left = (p * 100).toFixed(1) + '%';
+  UI.thrVal.textContent = Math.round(targetKmh);
+}
+function setThrottleFromX(clientX) {
+  const r = UI.throttle.getBoundingClientRect();
+  const pad = 14;
+  const p = Math.max(0, Math.min(1, (clientX - r.left - pad) / Math.max(1, r.width - pad * 2)));
+  targetKmh = SPD_MIN + p * (SPD_MAX - SPD_MIN);
+  drawThrottle();
+}
+let thrPointer = null;
+UI.throttle.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  thrPointer = e.pointerId;
+  try { UI.throttle.setPointerCapture(e.pointerId); } catch (err) {}
+  setThrottleFromX(e.clientX);
+  initAudio();
+}, { passive: false });
+UI.throttle.addEventListener('pointermove', (e) => {
+  if (thrPointer !== e.pointerId) return;
+  e.preventDefault();
+  setThrottleFromX(e.clientX);
+}, { passive: false });
+UI.throttle.addEventListener('pointerup', () => { thrPointer = null; });
+UI.throttle.addEventListener('pointercancel', () => { thrPointer = null; });
+drawThrottle();
+
 window.addEventListener('keydown', (e) => {
   keys[e.key.toLowerCase()] = true;
   if (e.key === 'Shift') boosting = true;
+  if (e.key === '+' || e.key === '=') { targetKmh = Math.min(SPD_MAX, targetKmh + 15); drawThrottle(); }
+  if (e.key === '-') { targetKmh = Math.max(SPD_MIN, targetKmh - 15); drawThrottle(); }
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].indexOf(e.key) >= 0) e.preventDefault();
 });
 window.addEventListener('keyup', (e) => {
   keys[e.key.toLowerCase()] = false;
   if (e.key === 'Shift') boosting = false;
 });
+
+/* ---------- localisation : ville et voie survolées ---------- */
+let geoAccum = 9, geoBusy = false, geoShown = '';
+let geoLastX = 1e9, geoLastZ = 1e9;
+function showPlace(city, sub) {
+  const key = city + '|' + sub;
+  if (key === geoShown) return;
+  geoShown = key;
+  UI.placeCity.textContent = city || '—';
+  UI.placeStreet.textContent = sub || '';
+  UI.place.classList.remove('hidden');
+}
+function scheduleGeo(dt) {
+  geoAccum += dt;
+  // une requête toutes les 2,5 s au plus : l'API IGN limite à 1 appel/seconde
+  if (geoAccum < 2.5 || geoBusy) return;
+  const x = flight.pos.x, z = flight.pos.z;
+  const moved = Math.hypot(x - geoLastX, z - geoLastZ);
+  if (geoShown && moved < 300) return;
+  geoAccum = 0;
+  geoLastX = x; geoLastZ = z;
+  const lon = (CX + x) / R * 180 / Math.PI;
+  const lat = latOfMercY(CY - z);
+  geoBusy = true;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 4500);
+  fetch('https://data.geopf.fr/geocodage/reverse?lon=' + lon.toFixed(5) + '&lat=' + lat.toFixed(5) + '&index=address&limit=1', { signal: ctl.signal })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      const f = j && j.features && j.features[0];
+      if (!f || !f.properties) return;
+      const pr = f.properties;
+      const city = pr.city || pr.municipality || '';
+      const sub = pr.district || pr.street || pr.name || '';
+      showPlace(city, sub);
+    })
+    .catch(() => {})
+    .finally(() => { clearTimeout(timer); geoBusy = false; });
+}
 
 /* ---------- modèle de vol ---------- */
 function updateFlight(dt) {
@@ -595,7 +676,7 @@ function updateFlight(dt) {
   const ix = Math.max(-1, Math.min(1, stickX + kx));
   const iy = Math.max(-1, Math.min(1, stickY + ky));
 
-  const targetSpeed = boosting ? 104 : 70;
+  const targetSpeed = (boosting ? Math.max(targetKmh + 80, 360) : targetKmh) / 3.6;
   flight.speed += (targetSpeed - flight.speed) * Math.min(1, dt * (boosting ? 1.8 : 0.9));
 
   flight.heading += ix * 0.62 * dt;
@@ -604,7 +685,7 @@ function updateFlight(dt) {
   flight.roll += ((-ix * 0.55) - flight.roll) * Math.min(1, dt * 4.0);
 
   const climb = Math.sin(flight.pitch) * flight.speed;
-  const sink = Math.max(0, 70 - flight.speed) * 0.6;
+  const sink = Math.max(0, 38 - flight.speed) * 0.6;
   flight.pos.y += (climb - sink) * dt;
   if (flight.pos.y > MAX_ALT) flight.pos.y = MAX_ALT;
 
@@ -677,6 +758,7 @@ function frame(ts) {
   if (state === 'flying') {
     updateFlight(dt);
     updateHud(dt);
+    scheduleGeo(dt);
     audioUpdate();
     detailTick += dt;
     if (detailTick > 0.5) {
