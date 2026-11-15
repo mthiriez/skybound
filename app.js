@@ -506,8 +506,8 @@ function makeWindow(z, n, seg, yOff, maxCache) {
   return w;
 }
 
-const winMid = makeWindow(13, 7, 56, 2.4, 180);   // ~34 km, 19 m/px
-const winNear = makeWindow(17, 5, 48, 3.6, 200);  // ~1,5 km, 0,76 m/px
+const winMid = makeWindow(14, 7, 56, 2.4, 180);   // ~17 km, 9,5 m/px
+const winNear = makeWindow(17, 7, 56, 3.6, 260);  // ~2,1 km, 0,76 m/px
 let detailTick = 0;
 
 function bldTileCoords(wx, wy) {
