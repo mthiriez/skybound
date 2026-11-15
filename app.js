@@ -27,7 +27,7 @@ const UI = {
 const R = 6378137;
 const WORLD = 2 * Math.PI * R;
 const CENTER = { lat: 50.6366, lon: 3.0633 };      // Grand-Place de Lille
-const ORTHO_Z = 14, ORTHO_TILES = 8;                // 8x8 tuiles -> texture 2048 px
+const ORTHO_Z = 14, ORTHO_TILES = 6;                // 6x6 tuiles -> texture 1536 px
 const ELEV_Z = 12;                                  // relief WGS84G
 const GRID = 320;                                   // sommets par côté
 
@@ -75,6 +75,7 @@ function loadImage(url) {
 }
 
 const elevTiles = new Map();
+let elevLittleEndian = null;
 async function loadElevTile(col, row) {
   const key = col + ':' + row;
   if (elevTiles.has(key)) return elevTiles.get(key);
@@ -92,8 +93,26 @@ async function loadElevTile(col, row) {
   }
   if (buf.byteLength < 256 * 256 * 4) throw new Error('Relief ' + col + '/' + row + ' : tuile incomplète (' + buf.byteLength + ' octets)');
   const dv = new DataView(buf);
+  // L'IGN ne documente pas l'ordre des octets du BIL : on le déduit de la
+  // première tuile, en gardant l'ordre qui donne des altitudes plausibles.
+  if (elevLittleEndian === null) {
+    let bigOk = 0, littleOk = 0;
+    for (let k = 0; k < 96; k++) {
+      const off = (k * 2731) % (65536 - 1) * 4;
+      const a = dv.getFloat32(off, false);
+      const b = dv.getFloat32(off, true);
+      if (isFinite(a) && a > -500 && a < 3200) bigOk++;
+      if (isFinite(b) && b > -500 && b < 3200) littleOk++;
+    }
+    elevLittleEndian = littleOk > bigOk;
+    console.info('[SKYBOUND] relief petit-boutiste : ' + elevLittleEndian + ' (' + bigOk + ' vs ' + littleOk + ')');
+  }
   const f = new Float32Array(256 * 256);
-  for (let i = 0; i < f.length; i++) f[i] = dv.getFloat32(i * 4, false);
+  for (let i = 0; i < f.length; i++) {
+    let v = dv.getFloat32(i * 4, elevLittleEndian);
+    if (!isFinite(v) || v < -500 || v > 3200) v = 0;
+    f[i] = v;
+  }
   elevTiles.set(key, f);
   return f;
 }
@@ -544,7 +563,9 @@ function startFlight() {
   UI.start.classList.add('hidden');
   UI.pauseOverlay.classList.add('hidden');
 }
-UI.go.addEventListener('click', startFlight);
+UI.go.addEventListener('click', startFlight);UI.start.addEventListener('click', () => {
+  if (!UI.go.disabled && state !== 'flying') startFlight();
+});
 
 UI.pause.addEventListener('click', () => {
   if (state !== 'flying') return;
