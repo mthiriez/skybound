@@ -493,6 +493,189 @@ async function refreshDetail(wx, wy) {
   }
 }
 
+/* ---------- bâtiments réels : BD TOPO IGN ---------- */
+// Empreintes et hauteurs réelles, extrudées sur le relief. Chargement par tuiles
+// autour de l'avion, une requête à la fois (l'API WFS de l'IGN tolère 1 appel/s).
+const BLD_SIZE = 600;          // côté d'une tuile, en mètres Mercator
+const BLD_RADIUS = 1;          // 3 x 3 tuiles autour de l'avion (~2,1 km)
+const BLD_MAX_CACHE = 40;
+const BLD_QUEUE_MS = 1100;     // intervalle minimum entre deux requêtes
+
+const bldMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true });
+const bldGroup = new THREE.Group();
+scene.add(bldGroup);
+const bldTiles = new Map();     // clé -> { mesh, ids }
+const bldOwner = new Map();     // cleabs -> clé de tuile (évite les doublons de bord)
+const bldQueue = [];
+let bldBusy = false, bldLastReq = 0, bldCenter = null;
+
+function bldTileCoords(wx, wy) {
+  return [Math.floor((wx + WORLD / 2) / BLD_SIZE), Math.floor((WORLD / 2 - wy) / BLD_SIZE)];
+}
+
+function bldHash(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0) / 4294967295;
+}
+
+// Geo -> coordonnées du monde (mètres Mercator, origine au centre de la zone)
+function geoToWorld(lon, lat) {
+  const mx = R * lon * Math.PI / 180;
+  const my = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+  return [mx - CX, -(my - CY)];
+}
+
+function bldGeometry(features, col, row) {
+  const pos = [], nrm = [], col3 = [], ids = [];
+  const x0 = col * BLD_SIZE - WORLD / 2, yTop = WORLD / 2 - row * BLD_SIZE;
+  let kept = 0;
+
+  const pushQuad = (ax, az, bx, bz, y0, y1, nx, nz, cr, cg, cb) => {
+    // deux triangles, normale horizontale donnée
+    pos.push(ax, y0, az, bx, y0, bz, bx, y1, bz,
+             ax, y0, az, bx, y1, bz, ax, y1, az);
+    for (let k = 0; k < 6; k++) { nrm.push(nx, 0, nz); col3.push(cr, cg, cb); }
+  };
+
+  for (let f = 0; f < features.length; f++) {
+    const ft = features[f];
+    const pr = ft.properties || {};
+    if (bldOwner.has(pr.cleabs) && bldOwner.get(pr.cleabs) !== col + ':' + row) continue;
+    if (pr.etat_de_l_objet && pr.etat_de_l_objet !== 'En service') continue;
+    if (!ft.geometry) continue;
+    const rings = [];
+    if (ft.geometry.type === 'Polygon') {
+      rings.push(ft.geometry.coordinates[0]);
+    } else if (ft.geometry.type === 'MultiPolygon') {
+      for (let i = 0; i < ft.geometry.coordinates.length; i++) rings.push(ft.geometry.coordinates[i][0]);
+    } else continue;
+
+    let h = Number(pr.hauteur);
+    if (!isFinite(h) || h <= 0) {
+      const a = Number(pr.altitude_maximale_toit), b = Number(pr.altitude_minimale_sol);
+      h = (isFinite(a) && isFinite(b) && a > b) ? a - b : 6;
+    }
+    h = Math.max(2.2, Math.min(120, h));
+
+    const tone = bldHash(String(pr.cleabs || f));
+    const wr = 0.30 + tone * 0.10, wg = 0.30 + tone * 0.09, wb = 0.31 + tone * 0.08;   // murs
+    const rr = 0.42 + tone * 0.11, rg = 0.40 + tone * 0.10, rb = 0.37 + tone * 0.09;   // toits
+
+    for (let r = 0; r < rings.length; r++) {
+      const ring = rings[r];
+      if (!ring || ring.length < 4) continue;
+      const pts = [];
+      let sx = 0, sz = 0;
+      for (let i = 0; i < ring.length; i++) {
+        const w = geoToWorld(ring[i][0], ring[i][1]);
+        pts.push(w); sx += w[0]; sz += w[1];
+      }
+      const cx = sx / pts.length, cz = sz / pts.length;
+      // altitude du sol sous le bâtiment, prise sur notre relief (cohérent avec le maillage)
+      const lonC = (cx + CX) / R * 180 / Math.PI;
+      const latC = latOfMercY(CY - cz);
+      const y0 = sampleElevation(lonC, latC);
+      const y1 = y0 + h;
+
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const dx = b[0] - a[0], dz = b[1] - a[1];
+        const len = Math.hypot(dx, dz);
+        if (len < 0.05) continue;
+        pushQuad(a[0], a[1], b[0], b[1], y0, y1, dz / len, -dx / len, wr, wg, wb);
+      }
+      // toit : triangulation de l'empreinte
+      const contour = pts.slice(0, -1).map((q) => new THREE.Vector2(q[0], q[1]));
+      let tris = [];
+      try { tris = THREE.ShapeUtils.triangulateShape(contour, []); } catch (e) { tris = []; }
+      for (let t = 0; t < tris.length; t++) {
+        const tri = tris[t];
+        const A = contour[tri[0].a !== undefined ? 0 : tri[0]], B = contour[tri[1]], C = contour[tri[2]];
+        if (!A || !B || !C) continue;
+        pos.push(A.x, y1, A.y, B.x, y1, B.y, C.x, y1, C.y);
+        for (let k = 0; k < 3; k++) { nrm.push(0, 1, 0); col3.push(rr, rg, rb); }
+      }
+      kept++;
+    }
+    if (pr.cleabs) { ids.push(pr.cleabs); bldOwner.set(pr.cleabs, col + ':' + row); }
+  }
+
+  if (!pos.length) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col3, 3));
+  g.computeBoundingSphere();
+  return { geometry: g, ids: ids, count: kept };
+}
+
+function bldDisposeTile(key) {
+  const t = bldTiles.get(key);
+  if (!t) return;
+  bldGroup.remove(t.mesh);
+  t.mesh.geometry.dispose();
+  for (let i = 0; i < t.ids.length; i++) if (bldOwner.get(t.ids[i]) === key) bldOwner.delete(t.ids[i]);
+  bldTiles.delete(key);
+}
+
+function bldRequest(col, row) {
+  const key = col + ':' + row;
+  if (bldTiles.has(key)) return;
+  bldTiles.set(key, { mesh: null, ids: [], loading: true });
+  const lonMin = (col * BLD_SIZE - WORLD / 2) / R * 180 / Math.PI;
+  const lonMax = ((col + 1) * BLD_SIZE - WORLD / 2) / R * 180 / Math.PI;
+  const latMax = latOfMercY(WORLD / 2 - row * BLD_SIZE);
+  const latMin = latOfMercY(WORLD / 2 - (row + 1) * BLD_SIZE);
+  const url = 'https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
+    + '&TYPENAMES=BDTOPO_V3:batiment&SRSNAME=EPSG:4326&OUTPUTFORMAT=application/json&COUNT=3000'
+    + '&PROPERTYNAME=cleabs,hauteur,geometrie'
+    + '&BBOX=' + [latMin, lonMin, latMax, lonMax].map((v) => v.toFixed(6)).join(',');
+  bldBusy = true;
+  fetch(url)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      const entry = bldTiles.get(key);
+      if (!entry || !j || !j.features) { if (entry) bldTiles.delete(key); return; }
+      const built = bldGeometry(j.features, col, row);
+      if (!built) { bldTiles.delete(key); return; }
+      const mesh = new THREE.Mesh(built.geometry, bldMaterial);
+      mesh.frustumCulled = true;
+      bldGroup.add(mesh);
+      bldTiles.set(key, { mesh: mesh, ids: built.ids });
+    })
+    .catch(() => { if (bldTiles.get(key) && !bldTiles.get(key).mesh) bldTiles.delete(key); })
+    .finally(() => { bldBusy = false; });
+}
+
+function bldTick() {
+  if (bldBusy) return;
+  const now = performance.now();
+  if (now - bldLastReq < BLD_QUEUE_MS) return;
+  const [col, row] = bldTileCoords(CX + flight.pos.x, CY - flight.pos.z);
+  if (col !== bldCenter) {
+    // purge des tuiles sorties du rayon
+    bldTiles.forEach((v, key) => {
+      const parts = key.split(':');
+      const c = Number(parts[0]), r = Number(parts[1]);
+      if (Math.abs(c - col) > BLD_RADIUS + 1 || Math.abs(r - row) > BLD_RADIUS + 1) bldDisposeTile(key);
+    });
+    bldCenter = col;
+  }
+  let best = null, bestD = 1e9;
+  for (let du = -BLD_RADIUS; du <= BLD_RADIUS; du++) {
+    for (let dv = -BLD_RADIUS; dv <= BLD_RADIUS; dv++) {
+      const c = col + du, r = row + dv, key = c + ':' + r;
+      if (bldTiles.has(key)) continue;
+      const d = du * du + dv * dv;
+      if (d < bestD) { bestD = d; best = [c, r]; }
+    }
+  }
+  if (!best) return;
+  bldLastReq = now;
+  bldRequest(best[0], best[1]);
+}
+
 /* ---------- état de vol ---------- */
 const flight = {
   pos: new THREE.Vector3(0, 420, 3200),
@@ -759,6 +942,7 @@ function frame(ts) {
     updateFlight(dt);
     updateHud(dt);
     scheduleGeo(dt);
+    bldTick();
     audioUpdate();
     detailTick += dt;
     if (detailTick > 0.5) {
