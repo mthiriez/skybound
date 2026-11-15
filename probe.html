@@ -1,53 +1,47 @@
 <!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SKYBOUND diagnostic</title>
-<style>body{background:#fff;color:#000;font:13px/1.5 ui-monospace,monospace;padding:12px;white-space:pre-wrap}</style>
-</head><body><div id="out">diagnostic...</div>
+<title>SKYBOUND diagnostic 3</title>
+<style>body{background:#fff;color:#000;font:12px/1.45 ui-monospace,monospace;padding:10px;white-space:pre-wrap}</style>
+</head><body><div id="out">v3 diagnostic...</div>
 <script>
 const out = document.getElementById('out');
 const log = s => { out.textContent += '\n' + s; };
 const urlE = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLE=normal&TILEMATRIXSET=WGS84G_6_14&TILEMATRIX=12&TILEROW=895&TILECOL=4165&FORMAT=image/x-bil;bits=32';
-const urlO = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX=14&TILEROW=5510&TILECOL=8330&FORMAT=image/jpeg';
+const urlAlt = 'https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json?lon=3.0633|3.0900&lat=50.6366|50.6200&resource=ign_rge_alti_wld&zonly=true&indent=false';
 (async () => {
   try {
-    const c = document.createElement('canvas');
-    const gl = c.getContext('webgl2') || c.getContext('webgl');
-    log('WebGL: ' + (gl ? 'oui ' + gl.getParameter(gl.VERSION) : 'NON'));
+    log('v3');
+    // 1. altitude de reference par l'API altimetrie
+    try {
+      const ra = await fetch(urlAlt);
+      const ja = await ra.json();
+      log('API alti HTTP ' + ra.status + ' -> ' + JSON.stringify(ja.elevations || ja));
+    } catch (e) { log('API alti KO: ' + e.message); }
 
+    // 2. tuile BIL
     const r = await fetch(urlE);
     let b = await r.arrayBuffer();
-    log('relief HTTP ' + r.status + ' | octets ' + b.byteLength);
+    log('tuile octets: ' + b.byteLength);
+    const u8 = new Uint8Array(b);
+    let hex = '';
+    for (let i = 0; i < 48; i++) hex += u8[i].toString(16).padStart(2,'0') + (i % 4 === 3 ? ' ' : '');
+    log('48 premiers octets: ' + hex);
+    const dv = new DataView(b);
+    const be = [], le = [];
+    for (let i = 0; i < 6; i++) { be.push(dv.getFloat32(i*4, false).toExponential(2)); le.push(dv.getFloat32(i*4, true).toExponential(2)); }
+    log('floats BE: ' + be.join(' '));
+    log('floats LE: ' + le.join(' '));
+    let mn8 = 255, mx8 = 0; for (let i = 0; i < 64; i++) { if (u8[i] < mn8) mn8 = u8[i]; if (u8[i] > mx8) mx8 = u8[i]; }
+    log('octets bruts 0..63: min ' + mn8 + ' max ' + mx8);
 
-    if (b.byteLength >= 262144) {
-      const n = Math.floor(b.byteLength / 4);
-      const dv = new DataView(b);
-      let beMin = 1e30, beMax = -1e30, beSum = 0, beFin = 0;
-      let leMin = 1e30, leMax = -1e30, leSum = 0, leFin = 0;
-      for (let i = 0; i < n; i++) {
-        const a = dv.getFloat32(i*4, false);
-        if (isFinite(a)) { beFin++; if (a<beMin) beMin=a; if (a>beMax) beMax=a; beSum+=a; }
-        const z = dv.getFloat32(i*4, true);
-        if (isFinite(z)) { leFin++; if (z<leMin) leMin=z; if (z>leMax) leMax=z; leSum+=z; }
-      }
-      log('flottants: ' + n);
-      log('BE min=' + beMin.toFixed(1) + ' max=' + beMax.toFixed(1) + ' moy=' + (beSum/beFin).toFixed(1) + ' finis=' + beFin);
-      log('LE min=' + leMin.toFixed(1) + ' max=' + leMax.toFixed(1) + ' moy=' + (leSum/leFin).toFixed(1) + ' finis=' + leFin);
-      let hex = '';
-      const u8 = new Uint8Array(b, 0, 16);
-      for (let i = 0; i < 16; i++) hex += u8[i].toString(16).padStart(2, '0');
-      log('16 premiers octets: ' + hex);
-      // altitude au centre de Lille si BE
-      log('valeur a l index 50000 BE=' + dv.getFloat32(50000*4, false).toFixed(1) + ' LE=' + dv.getFloat32(50000*4, true).toFixed(1));
-    } else {
-      log('relief trop court');
-    }
-
-    const img = new Image(); img.crossOrigin = 'anonymous';
-    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('image refusee')); img.src = urlO; });
-    const cv = document.createElement('canvas'); cv.width = 4; cv.height = 4;
-    const g2 = cv.getContext('2d'); g2.drawImage(img, 0, 0, 4, 4);
-    const px = g2.getImageData(0, 0, 1, 1).data;
-    log('ortho ' + img.naturalWidth + 'x' + img.naturalHeight + ' pixel=' + px[0] + ',' + px[1] + ',' + px[2]);
+    // 3. valeurs au pixel de Lille dans les deux ordres
+    const TILE_DEG = 180/4096;
+    const lonW = -180 + 4165*TILE_DEG, latN = 90 - 895*TILE_DEG;
+    const px = Math.round((3.0633-lonW)/TILE_DEG*256), py = Math.round((latN-50.6366)/TILE_DEG*256);
+    const off = (py*256+px)*4;
+    log('pixel Lille x=' + px + ' y=' + py);
+    log('valeur BE=' + dv.getFloat32(off, false).toFixed(2) + ' | LE=' + dv.getFloat32(off, true).toFixed(2));
+    log('octets a cet offset: ' + u8[off].toString(16) + ' ' + u8[off+1].toString(16) + ' ' + u8[off+2].toString(16) + ' ' + u8[off+3].toString(16));
     log('TERMINE');
   } catch (e) { log('ERREUR: ' + e.message); }
 })();
