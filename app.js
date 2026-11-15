@@ -161,7 +161,7 @@ async function buildTerrainTexture() {
   if (failed > total * 0.4) throw new Error('Trop de tuiles aériennes indisponibles (' + failed + '/' + total + ')');
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = true;
@@ -341,6 +341,146 @@ function buildAircraft() {
 const aircraft = buildAircraft();
 scene.add(aircraft);
 
+/* ---------- couche détail haute résolution (suit l'avion) ---------- */
+const DETAIL_Z = 17;                  // ~0,76 m/px à la latitude de Lille
+const DETAIL_N = 5;                   // 5x5 tuiles
+const DETAIL_PX = DETAIL_N * 256;
+const DETAIL_RES = 156543.033928041 * Math.cos(CENTER.lat * Math.PI / 180) / Math.pow(2, DETAIL_Z);
+const DETAIL_SPAN = DETAIL_PX * DETAIL_RES;   // ~970 m de côté
+const DETAIL_SEG = 48;
+
+const detailCv = document.createElement('canvas');
+detailCv.width = detailCv.height = DETAIL_PX;
+const detailCtx = detailCv.getContext('2d');
+detailCtx.fillStyle = '#3a4038';
+detailCtx.fillRect(0, 0, DETAIL_PX, DETAIL_PX);
+const detailTex = new THREE.CanvasTexture(detailCv);
+detailTex.colorSpace = THREE.SRGBColorSpace;
+detailTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+detailTex.minFilter = THREE.LinearMipmapLinearFilter;
+detailTex.magFilter = THREE.LinearFilter;
+detailTex.generateMipmaps = true;
+
+/* masque radial : la fenêtre nette se fond dans la photo large */
+const fadeCv = document.createElement('canvas');
+fadeCv.width = fadeCv.height = 256;
+(function () {
+  const g = fadeCv.getContext('2d');
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, 256, 256);
+  const grad = g.createRadialGradient(128, 128, 30, 128, 128, 127);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.58, '#ffffff');
+  grad.addColorStop(1, '#000000');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+}());
+const fadeTex = new THREE.CanvasTexture(fadeCv);
+
+let detailMesh = null;
+let detailColC = null, detailRowC = null, detailBusy = false, detailPending = false, detailTick = 0;
+const detailCache = new Map();
+
+function detailTile(col, row) {
+  const key = col + '/' + row;
+  let job = detailCache.get(key);
+  if (!job) {
+    job = loadImage(orthoUrl(DETAIL_Z, col, row)).catch(() => null);
+    detailCache.set(key, job);
+    if (detailCache.size > 220) detailCache.delete(detailCache.keys().next().value);
+  }
+  return job;
+}
+
+function buildDetailMesh() {
+  const n = DETAIL_SEG + 1;
+  const pos = new Float32Array(n * n * 3);
+  const uv = new Float32Array(n * n * 2);
+  const idx = new Uint32Array(DETAIL_SEG * DETAIL_SEG * 6);
+  for (let iy = 0; iy < n; iy++) {
+    for (let ix = 0; ix < n; ix++) {
+      const u = ix / DETAIL_SEG, v = iy / DETAIL_SEG;
+      const k = iy * n + ix;
+      pos[k * 3] = (u - 0.5) * DETAIL_SPAN;
+      pos[k * 3 + 1] = 0;
+      pos[k * 3 + 2] = (v - 0.5) * DETAIL_SPAN;
+      uv[k * 2] = u;
+      uv[k * 2 + 1] = 1 - v;
+    }
+  }
+  let o = 0;
+  for (let iy = 0; iy < DETAIL_SEG; iy++) {
+    for (let ix = 0; ix < DETAIL_SEG; ix++) {
+      const a = iy * n + ix, b = a + 1, c = a + n, d = c + 1;
+      idx[o++] = a; idx[o++] = c; idx[o++] = b;
+      idx[o++] = b; idx[o++] = c; idx[o++] = d;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  const mat = new THREE.MeshLambertMaterial({
+    map: detailTex, alphaMap: fadeTex, transparent: true, depthWrite: false,
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4
+  });
+  detailMesh = new THREE.Mesh(geo, mat);
+  detailMesh.frustumCulled = false;
+  scene.add(detailMesh);
+  return detailMesh;
+}
+
+function positionDetail() {
+  if (!detailMesh || detailColC === null) return;
+  const span = WORLD / Math.pow(2, DETAIL_Z);
+  const cxw = (detailColC + 0.5) * span - WORLD / 2;
+  const cyw = WORLD / 2 - (detailRowC + 0.5) * span;
+  detailMesh.position.set(cxw - CX, 1.6, -(cyw - CY));
+  const attr = detailMesh.geometry.getAttribute('position');
+  const n2 = DETAIL_SEG + 1;
+  for (let iy = 0; iy < n2; iy++) {
+    for (let ix = 0; ix < n2; ix++) {
+      const k = iy * n2 + ix;
+      const wx = cxw + (ix / DETAIL_SEG - 0.5) * DETAIL_SPAN;
+      const my = cyw - (iy / DETAIL_SEG - 0.5) * DETAIL_SPAN;
+      attr.array[k * 3 + 1] = sampleElevation(wx / R * 180 / Math.PI, latOfMercY(my));
+    }
+  }
+  attr.needsUpdate = true;
+  detailMesh.geometry.computeBoundingSphere();
+}
+
+async function refreshDetail(wx, wy) {
+  const span = WORLD / Math.pow(2, DETAIL_Z);
+  const colC = Math.floor((wx + WORLD / 2) / span);
+  const rowC = Math.floor((WORLD / 2 - wy) / span);
+  if (colC === detailColC && rowC === detailRowC) return;
+  if (detailBusy) { detailPending = true; return; }
+  detailBusy = true;
+  detailColC = colC; detailRowC = rowC;
+  const half = (DETAIL_N - 1) / 2;
+  const jobs = [];
+  for (let j = 0; j < DETAIL_N; j++) {
+    for (let i = 0; i < DETAIL_N; i++) {
+      const ix = i, iy = j;
+      jobs.push(detailTile(colC - half + i, rowC - half + j).then(img => {
+        detailCtx.fillStyle = '#3a4038';
+        detailCtx.fillRect(ix * 256, iy * 256, 256, 256);
+        if (img) detailCtx.drawImage(img, ix * 256, iy * 256, 256, 256);
+      }));
+    }
+  }
+  await Promise.all(jobs);
+  detailTex.needsUpdate = true;
+  positionDetail();
+  detailBusy = false;
+  if (detailPending) {
+    detailPending = false;
+    const px = flight.pos.x, pz = flight.pos.z;
+    refreshDetail(CX + px, CY - pz);
+  }
+}
+
 /* ---------- état de vol ---------- */
 const flight = {
   pos: new THREE.Vector3(0, 420, 3200),
@@ -516,7 +656,7 @@ function updateHud(dt) {
   UI.spd.textContent = Math.round(flight.speed * 3.6);
   let deg = flight.heading * 180 / Math.PI;
   deg = (deg % 360 + 360) % 360;
-  UI.hdg.textContent = Math.round(deg);
+  UI.hdg.textContent = Math.round(deg) % 360;
 }
 
 /* ---------- boucle ---------- */
@@ -533,6 +673,11 @@ function frame(ts) {
     updateFlight(dt);
     updateHud(dt);
     audioUpdate();
+    detailTick += dt;
+    if (detailTick > 0.5) {
+      detailTick = 0;
+      refreshDetail(CX + flight.pos.x, CY - flight.pos.z);
+    }
   }
   updateCamera(dt);
   renderer.render(scene, camera);
@@ -621,6 +766,9 @@ async function boot() {
     window.__skyProgress('Assemblage du terrain…', 0.96);
     const terrain = buildTerrainMesh(tex);
     scene.add(terrain);
+    window.__skyProgress('Détail haute résolution…', 0.97);
+    buildDetailMesh();
+    await refreshDetail(CX, CY - 3200);
     const gh = terrainHeightAt(0, 3200);
     flight.pos.y = Math.max(360, gh + 340);
     camera.position.set(0, flight.pos.y + 7, 3224);
