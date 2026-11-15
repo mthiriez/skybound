@@ -34,8 +34,8 @@ const UI = {
 const R = 6378137;
 const WORLD = 2 * Math.PI * R;
 const CENTER = { lat: 50.6366, lon: 3.0633 };      // Grand-Place de Lille
-const ORTHO_Z = 14, ORTHO_TILES = 6;                // 6x6 tuiles -> texture 1536 px
-const ELEV_Z = 12;                                  // relief WGS84G
+const ORTHO_Z = 11, ORTHO_TILES = 6;                // 6x6 tuiles -> ~117 km, texture 1536 px
+const ELEV_Z = 9;                                   // relief WGS84G (~39 km/tuile)
 const GRID = 320;                                   // sommets par côté
 
 const mercXOf = lon => lon * Math.PI / 180 * R;
@@ -278,7 +278,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xb9cbdd, 0.00005);
-const camera = new THREE.PerspectiveCamera(62, 1, 3, 30000);
+const camera = new THREE.PerspectiveCamera(62, 1, 3, 46000);
 
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
@@ -361,18 +361,6 @@ const DETAIL_SPAN = DETAIL_N * (WORLD / Math.pow(2, DETAIL_Z));   // ~1 529 m Me
 const DETAIL_RES_SOL = 156543.033928041 * Math.cos(CENTER.lat * Math.PI / 180) / Math.pow(2, DETAIL_Z); // ~0,76 m/px au sol
 const DETAIL_SEG = 48;
 
-const detailCv = document.createElement('canvas');
-detailCv.width = detailCv.height = DETAIL_PX;
-const detailCtx = detailCv.getContext('2d');
-detailCtx.fillStyle = '#3a4038';
-detailCtx.fillRect(0, 0, DETAIL_PX, DETAIL_PX);
-const detailTex = new THREE.CanvasTexture(detailCv);
-detailTex.colorSpace = THREE.SRGBColorSpace;
-detailTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-detailTex.minFilter = THREE.LinearMipmapLinearFilter;
-detailTex.magFilter = THREE.LinearFilter;
-detailTex.generateMipmaps = true;
-
 /* masque radial : la fenêtre nette se fond dans la photo large */
 const fadeCv = document.createElement('canvas');
 fadeCv.width = fadeCv.height = 256;
@@ -389,41 +377,41 @@ fadeCv.width = fadeCv.height = 256;
 }());
 const fadeTex = new THREE.CanvasTexture(fadeCv);
 
-let detailMesh = null;
-let detailColC = null, detailRowC = null, detailBusy = false, detailPending = false, detailTick = 0;
-const detailCache = new Map();
+/* fenêtre de photo nette : n x n tuiles autour de l'avion */
+function makeWindow(z, n, seg, yOff, maxCache) {
+  const span = WORLD / Math.pow(2, z);
+  const spanM = n * span;
+  const px = n * 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = px;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#2b3230';
+  ctx.fillRect(0, 0, px, px);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
 
-function detailTile(col, row) {
-  const key = col + '/' + row;
-  let job = detailCache.get(key);
-  if (!job) {
-    job = loadImage(orthoUrl(DETAIL_Z, col, row)).catch(() => null);
-    detailCache.set(key, job);
-    if (detailCache.size > 220) detailCache.delete(detailCache.keys().next().value);
-  }
-  return job;
-}
-
-function buildDetailMesh() {
-  const n = DETAIL_SEG + 1;
-  const pos = new Float32Array(n * n * 3);
-  const uv = new Float32Array(n * n * 2);
-  const idx = new Uint32Array(DETAIL_SEG * DETAIL_SEG * 6);
-  for (let iy = 0; iy < n; iy++) {
-    for (let ix = 0; ix < n; ix++) {
-      const u = ix / DETAIL_SEG, v = iy / DETAIL_SEG;
-      const k = iy * n + ix;
-      pos[k * 3] = (u - 0.5) * DETAIL_SPAN;
+  const ns = seg + 1;
+  const pos = new Float32Array(ns * ns * 3);
+  const uv = new Float32Array(ns * ns * 2);
+  const idx = new Uint32Array(seg * seg * 6);
+  for (let iy = 0; iy < ns; iy++) {
+    for (let ix = 0; ix < ns; ix++) {
+      const u = ix / seg, v = iy / seg, k = iy * ns + ix;
+      pos[k * 3] = (u - 0.5) * spanM;
       pos[k * 3 + 1] = 0;
-      pos[k * 3 + 2] = (v - 0.5) * DETAIL_SPAN;
+      pos[k * 3 + 2] = (v - 0.5) * spanM;
       uv[k * 2] = u;
       uv[k * 2 + 1] = 1 - v;
     }
   }
   let o = 0;
-  for (let iy = 0; iy < DETAIL_SEG; iy++) {
-    for (let ix = 0; ix < DETAIL_SEG; ix++) {
-      const a = iy * n + ix, b = a + 1, c = a + n, d = c + 1;
+  for (let iy = 0; iy < seg; iy++) {
+    for (let ix = 0; ix < seg; ix++) {
+      const a = iy * ns + ix, b = a + 1, c = a + ns, d = c + 1;
       idx[o++] = a; idx[o++] = c; idx[o++] = b;
       idx[o++] = b; idx[o++] = c; idx[o++] = d;
     }
@@ -433,81 +421,94 @@ function buildDetailMesh() {
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setIndex(new THREE.BufferAttribute(idx, 1));
   const mat = new THREE.MeshLambertMaterial({
-    map: detailTex, alphaMap: fadeTex, transparent: true, depthWrite: false,
+    map: tex, alphaMap: fadeTex, transparent: true, depthWrite: false,
     side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4
   });
-  detailMesh = new THREE.Mesh(geo, mat);
-  detailMesh.frustumCulled = false;
-  scene.add(detailMesh);
-  return detailMesh;
-}
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
 
-function positionDetail() {
-  if (!detailMesh || detailColC === null) return;
-  const span = WORLD / Math.pow(2, DETAIL_Z);
-  const cxw = (detailColC + 0.5) * span - WORLD / 2;
-  const cyw = WORLD / 2 - (detailRowC + 0.5) * span;
-  detailMesh.position.set(cxw - CX, 3.0, -(cyw - CY));
-  const attr = detailMesh.geometry.getAttribute('position');
-  const n2 = DETAIL_SEG + 1;
-  for (let iy = 0; iy < n2; iy++) {
-    for (let ix = 0; ix < n2; ix++) {
-      const k = iy * n2 + ix;
-      const wx = cxw + (ix / DETAIL_SEG - 0.5) * DETAIL_SPAN;
-      const my = cyw - (iy / DETAIL_SEG - 0.5) * DETAIL_SPAN;
-      attr.array[k * 3 + 1] = sampleElevation(wx / R * 180 / Math.PI, latOfMercY(my));
+  const w = {
+    z: z, n: n, seg: seg, yOff: yOff, span: span, spanM: spanM,
+    cv: cv, ctx: ctx, tex: tex, mesh: mesh,
+    cache: new Map(), colC: null, rowC: null, busy: false, pending: false,
+    maxCache: maxCache || 200
+  };
+
+  w.tile = function (col, row) {
+    const key = col + '/' + row;
+    let job = w.cache.get(key);
+    if (!job) {
+      job = loadImage(orthoUrl(z, col, row)).catch(() => null);
+      w.cache.set(key, job);
+      if (w.cache.size > w.maxCache) w.cache.delete(w.cache.keys().next().value);
     }
-  }
-  attr.needsUpdate = true;
-  detailMesh.geometry.computeBoundingSphere();
-}
+    return job;
+  };
 
-async function refreshDetail(wx, wy) {
-  const span = WORLD / Math.pow(2, DETAIL_Z);
-  const colC = Math.floor((wx + WORLD / 2) / span);
-  const rowC = Math.floor((WORLD / 2 - wy) / span);
-  if (colC === detailColC && rowC === detailRowC) return;
-  if (detailBusy) { detailPending = true; return; }
-  detailBusy = true;
-  detailColC = colC; detailRowC = rowC;
-  const half = (DETAIL_N - 1) / 2;
-  const jobs = [];
-  for (let j = 0; j < DETAIL_N; j++) {
-    for (let i = 0; i < DETAIL_N; i++) {
-      const ix = i, iy = j;
-      jobs.push(detailTile(colC - half + i, rowC - half + j).then(img => {
-        detailCtx.fillStyle = '#3a4038';
-        detailCtx.fillRect(ix * 256, iy * 256, 256, 256);
-        if (img) detailCtx.drawImage(img, ix * 256, iy * 256, 256, 256);
-      }));
+  w.position = function () {
+    if (w.colC === null) return;
+    const cxw = (w.colC + 0.5) * span - WORLD / 2;
+    const cyw = WORLD / 2 - (w.rowC + 0.5) * span;
+    w.mesh.position.set(cxw - CX, w.yOff, -(cyw - CY));
+    const attr = w.mesh.geometry.getAttribute('position');
+    for (let iy = 0; iy < ns; iy++) {
+      for (let ix = 0; ix < ns; ix++) {
+        const k = iy * ns + ix;
+        const wx = cxw + (ix / seg - 0.5) * spanM;
+        const my = cyw - (iy / seg - 0.5) * spanM;
+        attr.array[k * 3 + 1] = sampleElevation(wx / R * 180 / Math.PI, latOfMercY(my));
+      }
     }
-  }
-  await Promise.all(jobs);
-  detailTex.needsUpdate = true;
-  positionDetail();
-  detailBusy = false;
-  if (detailPending) {
-    detailPending = false;
-    const px = flight.pos.x, pz = flight.pos.z;
-    refreshDetail(CX + px, CY - pz);
-  }
+    attr.needsUpdate = true;
+    w.mesh.geometry.computeBoundingSphere();
+  };
+
+  w.refresh = async function (wx, wy) {
+    const colC = Math.floor((wx + WORLD / 2) / span);
+    const rowC = Math.floor((WORLD / 2 - wy) / span);
+    if (colC === w.colC && rowC === w.rowC) return;
+    if (w.busy) { w.pending = true; return; }
+    w.busy = true;
+    const c0 = colC - (n - 1) / 2, r0 = rowC - (n - 1) / 2;
+    const jobs = [];
+    for (let iy = 0; iy < n; iy++) {
+      for (let ix = 0; ix < n; ix++) {
+        jobs.push(w.tile(c0 + ix, r0 + iy));
+      }
+    }
+    const imgs = await Promise.all(jobs);
+    const stage = document.createElement('canvas');
+    stage.width = stage.height = px;
+    const sg = stage.getContext('2d');
+    sg.fillStyle = '#2b3230';
+    sg.fillRect(0, 0, px, px);
+    let ok = 0;
+    for (let k = 0; k < imgs.length; k++) {
+      const img = imgs[k];
+      if (!img) continue;
+      const ix = k % n, iy = Math.floor(k / n);
+      sg.drawImage(img, ix * 256, iy * 256, 256, 256);
+      ok++;
+    }
+    if (ok > n * n * 0.3) {
+      ctx.clearRect(0, 0, px, px);
+      ctx.drawImage(stage, 0, 0);
+      tex.needsUpdate = true;
+      w.colC = colC;
+      w.rowC = rowC;
+      w.position();
+    }
+    w.busy = false;
+    if (w.pending) { w.pending = false; w.refresh(wx, wy); }
+  };
+
+  return w;
 }
 
-/* ---------- bâtiments réels : BD TOPO IGN ---------- */
-// Empreintes et hauteurs réelles, extrudées sur le relief. Chargement par tuiles
-// autour de l'avion, une requête à la fois (l'API WFS de l'IGN tolère 1 appel/s).
-const BLD_SIZE = 600;          // côté d'une tuile, en mètres Mercator
-const BLD_RADIUS = 1;          // 3 x 3 tuiles autour de l'avion (~2,1 km)
-const BLD_MAX_CACHE = 40;
-const BLD_QUEUE_MS = 1100;     // intervalle minimum entre deux requêtes
-
-const bldMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true });
-const bldGroup = new THREE.Group();
-scene.add(bldGroup);
-const bldTiles = new Map();     // clé -> { mesh, ids }
-const bldOwner = new Map();     // cleabs -> clé de tuile (évite les doublons de bord)
-const bldQueue = [];
-let bldBusy = false, bldLastReq = 0, bldCenter = null;
+const winMid = makeWindow(13, 7, 56, 2.4, 180);   // ~34 km, 19 m/px
+const winNear = makeWindow(17, 5, 48, 3.6, 200);  // ~1,5 km, 0,76 m/px
+let detailTick = 0;
 
 function bldTileCoords(wx, wy) {
   return [Math.floor((wx + WORLD / 2) / BLD_SIZE), Math.floor((WORLD / 2 - wy) / BLD_SIZE)];
@@ -903,6 +904,8 @@ function updateCamera(dt) {
   camFwd.set(Math.sin(h), 0, -Math.cos(h));
   camDesired.copy(flight.pos).addScaledVector(camFwd, -24);
   camDesired.y += 7.2;
+  const camFloor = terrainHeightAt(camDesired.x, camDesired.z) + 3.0;
+  if (camDesired.y < camFloor) camDesired.y = camFloor;
   const k = state === 'flying' ? (1 - Math.exp(-dt * 4.5)) : 1;
   camera.position.lerp(camDesired, k);
   if (flight.shake > 0.01) {
@@ -911,6 +914,8 @@ function updateCamera(dt) {
   }
   camLook.copy(flight.pos).addScaledVector(camFwd, 46);
   camLook.y += 2;
+  const lookFloor = terrainHeightAt(camLook.x, camLook.z) + 1.5;
+  if (camLook.y < lookFloor) camLook.y = lookFloor;
   camera.lookAt(camLook);
   sky.position.copy(camera.position);
 }
@@ -947,7 +952,9 @@ function frame(ts) {
     detailTick += dt;
     if (detailTick > 0.5) {
       detailTick = 0;
-      refreshDetail(CX + flight.pos.x, CY - flight.pos.z);
+      const wx = CX + flight.pos.x, wy = CY - flight.pos.z;
+      winMid.refresh(wx, wy);
+      winNear.refresh(wx, wy);
     }
   }
   updateCamera(dt);
@@ -1038,8 +1045,8 @@ async function boot() {
     const terrain = buildTerrainMesh(tex);
     scene.add(terrain);
     window.__skyProgress('Détail haute résolution…', 0.97);
-    buildDetailMesh();
-    await refreshDetail(CX, CY - 3200);
+    await winMid.refresh(CX, CY - 3200);
+    await winNear.refresh(CX, CY - 3200);
     const gh = terrainHeightAt(0, 3200);
     flight.pos.y = Math.max(360, gh + 340);
     camera.position.set(0, flight.pos.y + 7, 3224);
